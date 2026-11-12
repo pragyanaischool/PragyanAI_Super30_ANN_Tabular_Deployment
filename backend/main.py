@@ -1,96 +1,111 @@
-# ==========================================
-# BACKEND: FastAPI Inference Engine (main.py)
-# ==========================================
+import joblib
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import numpy as np
-import joblib
+from pydantic import BaseModel
 import tensorflow as tf
-import os
 
-# 1. Initialize FastAPI Application
 app = FastAPI(
     title="Diabetes Prediction API",
-    description="High-performance serverless inference API powered by a Tiny TFLite ANN model.",
-    version="1.0.0"
+    description=(
+        "FastAPI backend serving an optimized TFLite ANN model for Diabetes"
+        " Prediction"
+    ),
+    version="1.0.0",
 )
 
-# 2. Configure CORS Middleware (Allow requests from Netlify frontend)
+# Configure CORS to allow communication with your deployed Netlify frontend
+origins = [
+    "https://pragyanai-ann-tabular-tinymodel.netlify.app",
+    "http://localhost:3000",
+    "http://localhost:3001",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your specific Netlify frontend URL
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 3. Load Scaler and Tiny TFLite Model
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "model")
-SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
-TFLITE_MODEL_PATH = os.path.join(MODEL_DIR, "diabetes_tiny_model.tflite")
 
+# Define request body validation schema
+class DiabetesInput(BaseModel):
+  Pregnancies: float
+  Glucose: float
+  BloodPressure: float
+  SkinThickness: float
+  Insulin: float
+  BMI: float
+  DiabetesPedigreeFunction: float
+  Age: float
+
+
+# Load Scaler and TFLite Model at startup
 try:
-    scaler = joblib.load(SCALER_PATH)
-    interpreter = tf.lite.Interpreter(model_path=TFLITE_MODEL_PATH)
-    interpreter.allocate_tensors()
-
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-    print("Model and scaler loaded successfully into inference engine.")
+  scaler = joblib.load("model/scaler.pkl")
+  interpreter = tf.lite.Interpreter(model_path="model/diabetes_tiny_model.tflite")
+  interpreter.allocate_tensors()
+  input_details = interpreter.get_input_details()
+  output_details = interpreter.get_output_details()
 except Exception as e:
-    print(f"Error loading model assets: {e}")
+  print(f"⚠️ Warning: Could not load model or scaler assets: {e}")
 
-# 4. Define Pydantic Request Body Schema
-class PatientData(BaseModel):
-    pregnancies: float
-    glucose: float
-    blood_pressure: float
-    skin_thickness: float
-    insulin: float
-    bmi: float
-    diabetes_pedigree: float
-    age: float
 
 @app.get("/")
 def read_root():
-    return {
-        "status": "Online",
-        "service": "India Diabetes ANN Tiny Model Inference API",
-        "docs_url": "/docs"
-    }
+  return {
+      "status": "Online",
+      "service": "Diabetes Prediction ANN TFLite API",
+      "frontend_origin": "https://pragyanai-ann-tabular-tinymodel.netlify.app",
+  }
+
 
 @app.post("/predict")
-def predict_diabetes(data: PatientData):
-    try:
-        # Extract features into a 2D numpy array
-        features = np.array([[
-            data.pregnancies,
-            data.glucose,
-            data.blood_pressure,
-            data.skin_thickness,
-            data.insulin,
-            data.bmi,
-            data.diabetes_pedigree,
-            data.age
-        ]], dtype=np.float32)
+def predict_diabetes(data: DiabetesInput):
+  try:
+    # 1. Convert input data into a 2D numpy array matching feature shape
+    input_data = np.array(
+        [[
+            data.Pregnancies,
+            data.Glucose,
+            data.BloodPressure,
+            data.SkinThickness,
+            data.Insulin,
+            data.BMI,
+            data.DiabetesPedigreeFunction,
+            data.Age,
+        ]],
+        dtype=np.float32,
+    )
 
-        # Scale features using the saved StandardScaler
-        scaled_features = scaler.transform(features)
+    # 2. Normalize features using the saved StandardScaler
+    scaled_data = scaler.transform(input_data).astype(np.float32)
 
-        # Run inference using the Tiny TFLite Interpreter
-        interpreter.set_tensor(input_details[0]['index'], scaled_features)
-        interpreter.invoke()
-        prediction_tensor = interpreter.get_tensor(output_details[0]['index'])
+    # 3. Run TFLite inference
+    interpreter.set_tensor(input_details[0]["index"], scaled_data)
+    interpreter.invoke()
 
-        probability = float(prediction_tensor[0][0])
-        diagnostic_result = "⚠️ High Risk: Diabetic Indicators Detected" if probability > 0.5 else "✅ Low Risk: Healthy Profile"
+    # 4. Extract prediction probability
+    output_data = interpreter.get_tensor(output_details[0]["index"])
+    raw_prob = float(output_data[0][0])
 
-        return {
-            "prediction_score": round(probability, 4),
-            "confidence_percentage": f"{probability * 100:.2f}%",
-            "diagnostic_result": diagnostic_result
-        }
+    # 5. Formulate result based on 0.5 threshold
+    prediction = 1 if raw_prob >= 0.5 else 0
+    result_text = (
+        "Positive for Diabetes Risk"
+        if prediction == 1
+        else "Negative for Diabetes Risk"
+    )
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Inference execution failed: {str(e)}")
+    return {
+        "prediction": prediction,
+        "probability": round(raw_prob, 4),
+        "result": result_text,
+    }
+
+  except Exception as e:
+    raise HTTPException(
+        status_code=500, detail=f"Inference execution failed: {str(e)}"
+    )
