@@ -24,7 +24,7 @@ app = FastAPI(
 
 # Configure CORS for your Netlify frontend
 origins = [
-    "https://pragyanai-ann-tabular-tinymodel.netlify.app",[cite: 1]
+    "https://pragyanai-ann-tabular-tinymodel.netlify.app",
     "http://localhost:3000",
     "http://localhost:3001",
 ]
