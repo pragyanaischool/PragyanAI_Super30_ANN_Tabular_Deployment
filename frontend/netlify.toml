@@ -5,6 +5,7 @@
 
 [build.environment]
   CI = "false"
+  DISABLE_ESLINT_PLUGIN = "true"
 
 [[redirects]]
   from = "/*"
